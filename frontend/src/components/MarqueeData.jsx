@@ -16,7 +16,7 @@ const TickerItem = React.memo(
         >
           <span className="w-12 inline-block text-center">{netChange}</span>
           <span
-            className={`ml-1 rounded px-2 py-1 ${
+            className={`ml-1 rounded px-2 ${
               isPositive
                 ? "bg-green-100 text-green-500"
                 : "bg-red-100 text-red-500"

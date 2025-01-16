@@ -25,7 +25,7 @@ const CardItem = React.memo(({ symbolName, lastPrice, netChange, changePercentag
         >
           <span className="w-10 text-center">{netChange}</span>
           <span
-            className={`ml-2 rounded px-2 py-1 flex items-center justify-center ${
+            className={`ml-2 rounded px-2 flex items-center justify-center ${
               isPositive ? "bg-green-100 text-green-500" : "bg-red-100 text-red-500"
             }`}
           >
@@ -130,7 +130,7 @@ const CardData = React.memo(() => {
   }, [desiredTickData]);
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-2 mt-5 p-1">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-2 mt-2 p-1">
       {Object.keys(renderedData).map((token) => {
         const data = renderedData[token];
         return (
