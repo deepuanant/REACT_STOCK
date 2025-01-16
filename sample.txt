@@ -1,0 +1,37 @@
+backend/
+├── src/
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── settings.py           # Load environment variables and config
+│   │
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── kite_connect/
+│   │   │   ├── __init__.py
+│   │   │   ├── access_token.py   # Move from root
+│   │   │   ├── instruments.py    # Move from root
+│   │   │   └── initializer.py    # Move from root
+│   │   │
+│   │   └── websocket/
+│   │       ├── __init__.py
+│   │       └── ticker.py         # WebSocket handling logic
+│   │
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── routes.py            # API endpoints
+│   │   └── websocket.py         # WebSocket events
+│   │
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   └── http_request.py      # Move from utils/
+│   │
+│   └── app.py                   # Main application file
+│
+├── tests/
+│   ├── __init__.py
+│   └── test_kite_connect.py
+│
+├── .env
+├── .gitignore
+├── requirements.txt
+└── README.md
