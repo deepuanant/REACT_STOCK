@@ -109,19 +109,4 @@ def test_disconnect():
     print('Client disconnected')
 
 if __name__ == '__main__':
-    # Detect environment
-    environment = os.getenv("FLASK_ENV", "development")
-
-    if environment == "development":
-        # Use Werkzeug for development
-        socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
-    else:
-        # Use eventlet for production
-        try:
-            import eventlet
-            eventlet.monkey_patch()
-            socketio.run(app, host="0.0.0.0", port=5000, debug=False)
-        except ImportError:
-            raise RuntimeError(
-                "For production, install 'eventlet' or 'gevent' as a production server."
-            )
+    socketio.run(app, debug=True)
