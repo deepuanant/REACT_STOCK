@@ -3,39 +3,47 @@ import { WebSocketContext } from "../WebSocketContext";
 import { FaArrowUp, FaArrowDown } from "react-icons/fa";
 
 // Memoized CardItem for individual cards
-const CardItem = React.memo(({ symbolName, lastPrice, netChange, changePercentage, isPositive }) => {
-  return (
-    <div className="bg-white shadow-md rounded-lg p-1 flex flex-col items-center justify-center">
-      <div className="flex items-center mb-2">
-        <h3 className="text-sm font-semibold text-center mr-2">{symbolName}</h3>
-        <div
-          className={`rounded-full p-2 flex items-center justify-center ${
-            isPositive ? "bg-green-100 text-green-500" : "bg-red-100 text-red-500"
-          } w-6 h-6`}
-        >
-          {isPositive ? <FaArrowUp /> : <FaArrowDown />}
+const CardItem = React.memo(
+  ({ symbolName, lastPrice, netChange, changePercentage, isPositive }) => {
+    return (
+      <div className="bg-white shadow-md rounded-lg p-1 flex flex-col items-center justify-center">
+        <div className="flex items-center mb-2">
+          <h3 className="text-sm font-semibold text-center mr-2">
+            {symbolName}
+          </h3>
+          <div
+            className={`rounded-full p-1 flex items-center justify-center ${
+              isPositive
+                ? "bg-green-100 text-green-500"
+                : "bg-red-100 text-red-500"
+            } w-5 h-5`}
+          >
+            {isPositive ? <FaArrowUp /> : <FaArrowDown />}
+          </div>
         </div>
-      </div>
-      <div className="flex items-center text-gray-700 text-sm">
-        <span className="mr-2 w-14 text-center">{lastPrice}</span>
-        <div
-          className={`flex items-center ${
-            isPositive ? "text-green-500" : "text-red-500"
-          }`}
-        >
-          <span className="w-10 text-center">{netChange}</span>
-          <span
-            className={`ml-2 rounded px-2 flex items-center justify-center ${
-              isPositive ? "bg-green-100 text-green-500" : "bg-red-100 text-red-500"
+        <div className="flex items-center text-gray-700 text-sm">
+          <span className="mr-2 w-14 text-center">{lastPrice}</span>
+          <div
+            className={`flex items-center ${
+              isPositive ? "text-green-500" : "text-red-500"
             }`}
           >
-            {changePercentage}%
-          </span>
+            <span className="w-10 text-center">{netChange}</span>
+            <span
+              className={`ml-2 rounded px-2 flex items-center justify-center ${
+                isPositive
+                  ? "bg-green-100 text-green-500"
+                  : "bg-red-100 text-red-500"
+              }`}
+            >
+              {changePercentage}%
+            </span>
+          </div>
         </div>
       </div>
-    </div>
-  );
-});
+    );
+  }
+);
 
 const CardData = React.memo(() => {
   const { desiredTickData } = useContext(WebSocketContext); // Real-time data from WebSocket
