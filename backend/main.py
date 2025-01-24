@@ -19,45 +19,53 @@ app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-shutdown_event = threading.Event()  # For graceful shutdown if needed
+# If you ever want to stop all rotation threads gracefully:
+shutdown_event = threading.Event()
 
 
 class SegmentPriorityManager:
     def __init__(self):
-        self.kite, _ = initialize_kite()  # For reference
+        # Just to initialize once
+        self.kite, _ = initialize_kite()
+
+        # Central storage for all ticks
         self.central_storage = {}
 
-        # {ws_id: kws_instance}
+        # Dictionary tracking active websockets: {ws_id: kws_instance}
         self.connections = {}
 
         # Zerodha constraints
         self.SYMBOLS_PER_CONNECTION = 3000
-        self.max_websockets = 3
+        self.max_websockets = 3  # In practice, cannot exceed 3 with Zerodha
 
     ################################################################
     #               INSTRUMENT SEGREGATION
     ################################################################
+
     def segment_priority_filter(self, instruments):
         """
-        Returns two lists: priority_instruments, rotation_instruments
+        Splits instruments into two groups:
+          - Priority: e.g. 'segment' in ['INDICES', 'NFO-FUT']
+          - Rotation: everything else
+        Adjust to your business needs.
         """
         priority_instruments = []
         rotation_instruments = []
 
         for instr in instruments:
-            # Example rule: segment in ['INDICES', 'NFO-FUT'] => priority
             if instr['segment'] in ['INDICES', 'NFO-FUT']:
                 priority_instruments.append(instr)
-            elif instr['segment'] in ['NSE', 'NFO-OPT']:
+            else:
                 rotation_instruments.append(instr)
 
         return priority_instruments, rotation_instruments
 
     ################################################################
-    #               KITE TICK / CONNECTION HANDLERS
+    #              KITE WEBSOCKET EVENT HANDLERS
     ################################################################
+
     def on_ticks(self, ws_id, ticks):
-        # Store ticks data in central_storage
+        """Handle inbound tick data from Kite WebSocket."""
         for tick in ticks:
             token = tick['instrument_token']
             last_price = tick.get('last_price', 0.0)
@@ -81,17 +89,21 @@ class SegmentPriorityManager:
 
     def on_close(self, ws_id, ws, code, reason):
         print(f"WebSocket {ws_id} closed: {code} - {reason}")
-        # Remove from connections dict if it still exists
+        # Remove it from the dictionary so next time we see it's missing
         if ws_id in self.connections:
             del self.connections[ws_id]
 
     def on_error(self, ws_id, ws, code, reason):
-        # Optional: If you want to see any errors
         print(f"WebSocket {ws_id} error: {code} - {reason}")
+
+    ################################################################
+    #              CREATE / ENSURE WEBSOCKET CONNECTED
+    ################################################################
 
     def create_websocket(self, ws_id, is_priority=False):
         """
-        Creates a Kite WebSocket client (does NOT immediately subscribe).
+        Creates a new Kite WebSocket instance, attaches handlers,
+        connects in a separate thread, and stores in self.connections.
         """
         kite, kws = initialize_kite()
 
@@ -114,89 +126,120 @@ class SegmentPriorityManager:
 
         # Connect in a separate thread
         kws.connect(threaded=True)
-
-        # Store reference
         self.connections[ws_id] = kws
         return kws
 
+    def ensure_ws_connected(self, ws_id, is_priority=False, max_retries=3):
+        """
+        If 'ws_id' is not in self.connections or was closed,
+        try to recreate it (up to `max_retries`).
+        Returns the (existing or new) kws instance, or None if fails.
+        """
+        attempts = 0
+        while not shutdown_event.is_set():
+            kws = self.connections.get(ws_id)
+            if kws:
+                # Already have a WebSocket
+                return kws
+
+            print(f"[ensure_ws_connected] Attempting to connect WS {ws_id}, is_priority={is_priority}, attempt={attempts+1}")
+            try:
+                self.create_websocket(ws_id, is_priority=is_priority)
+                # Allow a moment for on_connect
+                time.sleep(2)
+                kws = self.connections.get(ws_id)
+                if kws:
+                    return kws
+            except Exception as e:
+                print(f"[ensure_ws_connected] Error creating WS {ws_id}: {e}")
+
+            attempts += 1
+            if attempts >= max_retries:
+                print(f"[ensure_ws_connected] Failed to reconnect WS {ws_id} after {max_retries} attempts.")
+                return None
+
+            time.sleep(2)
+
+        return None
+
     ################################################################
-    #                 STARTING AND MANAGING STREAMING
+    #               MAIN START STREAMING LOGIC
     ################################################################
+
     def start_streaming(self, instruments):
         """
-        Main entry: creates up to 3 WebSockets:
-          - #1 for priority + (optional leftover rotation)
-          - #2 and #3 for the remainder of rotation
+        1) Segregate priority vs rotation
+        2) Setup WebSocket #1 for either
+           (a) all priority + leftover rotation
+           (b) or 3000 priority if >3000, pushing overflow to rotation
+        3) Setup WS #2 + #3 for the remaining rotation
+        4) Launch rotation threads with automatic reconnect
         """
-        priority_instruments, all_rotation_instruments = self.segment_priority_filter(instruments)
-
+        priority_instruments, rotation_instruments = self.segment_priority_filter(instruments)
         priority_tokens = [i['instrument_token'] for i in priority_instruments]
-        rotation_tokens = [i['instrument_token'] for i in all_rotation_instruments]
+        rotation_tokens = [i['instrument_token'] for i in rotation_instruments]
 
-        # 1) Create Priority WebSocket (#1)
-        ws1 = self.create_websocket(ws_id=1, is_priority=True)
-        time.sleep(1)  # wait for on_connect
+        # Create / ensure WebSocket #1
+        ws1 = self.ensure_ws_connected(ws_id=1, is_priority=True)
+        time.sleep(2)  # short pause
 
-        # (A) Always subscribe to priority tokens
-        count_priority = len(priority_tokens)
-        if count_priority > self.SYMBOLS_PER_CONNECTION:
-            print("ERROR: Too many priority tokens (>3000). Please reduce them.")
+        if not ws1:
+            print("ERROR: Could not initialize WebSocket #1. Aborting streaming.")
             return
 
-        leftover_capacity = self.SYMBOLS_PER_CONNECTION - count_priority
-        leftover_tokens_for_ws1 = []
+        count_priority = len(priority_tokens)
+        if count_priority <= self.SYMBOLS_PER_CONNECTION:
+            # CASE A: All priority fits in a single WS
+            leftover_capacity = self.SYMBOLS_PER_CONNECTION - count_priority
+            leftover_tokens_for_ws1 = []
 
-        # (B) If leftover capacity is positive, take that many from rotation_tokens
-        if leftover_capacity > 0 and rotation_tokens:
-            # e.g., if leftover_capacity=2165, we take min(2165, len(rotation_tokens))
-            chunk_size = min(leftover_capacity, len(rotation_tokens))
-            leftover_tokens_for_ws1 = rotation_tokens[:chunk_size]
-            # remove them from the global rotation list
-            rotation_tokens = rotation_tokens[chunk_size:]
+            if leftover_capacity > 0 and rotation_tokens:
+                # Take leftover_capacity from rotation
+                chunk_size = min(leftover_capacity, len(rotation_tokens))
+                leftover_tokens_for_ws1 = rotation_tokens[:chunk_size]
+                rotation_tokens = rotation_tokens[chunk_size:]
 
-        # Subscribe Priority + leftover tokens on #1
-        if ws1:
             combined_ws1_tokens = priority_tokens + leftover_tokens_for_ws1
+            # Subscribe them
             ws1.subscribe(combined_ws1_tokens)
             ws1.set_mode(ws1.MODE_FULL, combined_ws1_tokens)
-            print(f"WebSocket 1 subscribed to {len(priority_tokens)} priority + {len(leftover_tokens_for_ws1)} leftover rotation tokens (total {len(combined_ws1_tokens)}).")
+            print(f"WS1 subscribed to {len(priority_tokens)} priority + {len(leftover_tokens_for_ws1)} leftover (total {len(combined_ws1_tokens)}).")
 
-        # 2) Split REMAINING rotation tokens for websockets #2 and #3
-        #    The leftover tokens for #1 are no longer in rotation_tokens
-        #    because we popped them out already.
+            # If leftover tokens used, start rotation on WS1
+            if leftover_tokens_for_ws1:
+                t1 = threading.Thread(
+                    target=self.manage_rotation_ws1,
+                    args=(1, priority_tokens, leftover_tokens_for_ws1),
+                    daemon=True
+                )
+                t1.start()
+
+        else:
+            # CASE B: Priority > 3000
+            # 1) Put the first 3000 on WS1
+            # 2) Overflow merges into rotation
+            ws1_priority = priority_tokens[:self.SYMBOLS_PER_CONNECTION]
+            overflow_priority = priority_tokens[self.SYMBOLS_PER_CONNECTION:]  # the excess
+            rotation_tokens = overflow_priority + rotation_tokens  # push to rotation
+
+            ws1.subscribe(ws1_priority)
+            ws1.set_mode(ws1.MODE_FULL, ws1_priority)
+            print(f"WS1 subscribed to 3000 priority. Overflow {len(overflow_priority)} merged into rotation.")
+
+        # Now handle rotation tokens with WS2, WS3
         tokens_ws2, tokens_ws3 = self._split_list_in_half(rotation_tokens)
 
-        ws2 = self.create_websocket(ws_id=2, is_priority=False)
-        ws3 = self.create_websocket(ws_id=3, is_priority=False)
-        time.sleep(1)
+        ws2 = self.ensure_ws_connected(ws_id=2, is_priority=False)
+        ws3 = self.ensure_ws_connected(ws_id=3, is_priority=False)
+        time.sleep(2)
 
-        # Subscribe initial batch for WS2
         if ws2 and tokens_ws2:
-            initial2 = tokens_ws2[:self.SYMBOLS_PER_CONNECTION]
-            ws2.subscribe(initial2)
-            ws2.set_mode(ws2.MODE_FULL, initial2)
-            print(f"Rotation WebSocket 2 subscribed to {len(initial2)} tokens initially.")
+            init2 = tokens_ws2[:self.SYMBOLS_PER_CONNECTION]
+            ws2.subscribe(init2)
+            ws2.set_mode(ws2.MODE_FULL, init2)
+            print(f"Rotation WS2 subscribed to {len(init2)} tokens initially.")
 
-        # Subscribe initial batch for WS3
-        if ws3 and tokens_ws3:
-            initial3 = tokens_ws3[:self.SYMBOLS_PER_CONNECTION]
-            ws3.subscribe(initial3)
-            ws3.set_mode(ws3.MODE_FULL, initial3)
-            print(f"Rotation WebSocket 3 subscribed to {len(initial3)} tokens initially.")
-
-        # 3) Start rotation threads
-        #    - One thread for leftover rotation on WS1 (optional)
-        #    - One thread each for WS2, WS3
-
-        if leftover_tokens_for_ws1:
-            t1 = threading.Thread(
-                target=self.manage_rotation_ws1,
-                args=(1, priority_tokens, leftover_tokens_for_ws1),
-                daemon=True
-            )
-            t1.start()
-
-        if tokens_ws2:
+            # Start rotation thread
             t2 = threading.Thread(
                 target=self.manage_rotation,
                 args=(2, tokens_ws2),
@@ -204,7 +247,13 @@ class SegmentPriorityManager:
             )
             t2.start()
 
-        if tokens_ws3:
+        if ws3 and tokens_ws3:
+            init3 = tokens_ws3[:self.SYMBOLS_PER_CONNECTION]
+            ws3.subscribe(init3)
+            ws3.set_mode(ws3.MODE_FULL, init3)
+            print(f"Rotation WS3 subscribed to {len(init3)} tokens initially.")
+
+            # Start rotation thread
             t3 = threading.Thread(
                 target=self.manage_rotation,
                 args=(3, tokens_ws3),
@@ -217,84 +266,69 @@ class SegmentPriorityManager:
         return (lst[:half], lst[half:])
 
     ################################################################
-    #    ROTATION #1:  Priority + leftover rotation on the SAME WS
+    #            ROTATION #1: Priority + leftover on WS1
     ################################################################
 
     def manage_rotation_ws1(self, ws_id, priority_tokens, rotation_tokens):
         """
-        WebSocket #1 is always subscribed to `priority_tokens`, 
-        but we rotate a subset of NSE tokens (rotation_tokens) in leftover capacity.
-
-        The process:
-          - We keep priority always subscribed
-          - We rotate unsub/subscribe only for the 'rotating' subset
-          - Combined subscription = priority_tokens + current_batch_of_rotation
+        If priority <= 3000, leftover capacity on WS1 can rotate some rotation tokens,
+        while always keeping the priority tokens subscribed.
+        Uses automatic reconnection each loop.
         """
-
-        kws = self.connections.get(ws_id)
-        if not kws:
-            print("No WebSocket #1 found. Cannot rotate leftover on #1.")
-            return
-
         token_deque = deque(rotation_tokens)
-
-        # Track the last rotation subset we subscribed
         last_rotation_batch = None
-        permanent_set = set(priority_tokens)  # keep them always
 
         while not shutdown_event.is_set():
-            # Double-check if the WS is still open
-            kws = self.connections.get(ws_id)
+            kws = self.ensure_ws_connected(ws_id, is_priority=True)
             if not kws:
-                print("WebSocket #1 no longer available. Stopping rotation.")
+                # Could not reconnect => stop
+                print(f"WebSocket #{ws_id} leftover rotation giving up.")
                 break
-
-            total_rotation = len(token_deque)
-            if total_rotation == 0:
-                time.sleep(10)
-                continue
 
             leftover_capacity = self.SYMBOLS_PER_CONNECTION - len(priority_tokens)
             if leftover_capacity <= 0:
-                # Nothing to rotate if no leftover capacity
                 time.sleep(10)
                 continue
 
-            # Step 1: Unsubscribe the last rotation batch (if any)
+            if not token_deque:
+                time.sleep(10)
+                continue
+
+            # 1) Unsubscribe last leftover batch
             if last_rotation_batch:
                 try:
                     kws.unsubscribe(last_rotation_batch)
-                    time.sleep(1)  # small gap
+                    time.sleep(1)
                 except Exception as e:
-                    print(f"[WS1] Unsubscribe leftover error: {e}")
+                    print(f"[WS1 leftover] Unsubscribe error: {e}")
 
-            # Step 2: Rotate a chunk from the deque
-            rotate_step = min(300, total_rotation)  # or any chunk size
+            # 2) Rotate a chunk
+            rotate_step = min(300, len(token_deque))
             token_deque.rotate(-rotate_step)
 
-            # Step 3: New rotation batch is up to leftover_capacity
+            # 3) Take up to leftover_capacity
             new_rotation_batch = list(token_deque)[:leftover_capacity]
-
-            # Step 4: Subscribe to priority + new rotation batch
             combined_list = priority_tokens + new_rotation_batch
+
+            # 4) Subscribe
             try:
                 kws.subscribe(combined_list)
                 kws.set_mode(kws.MODE_FULL, combined_list)
                 last_rotation_batch = new_rotation_batch
-                print(f"WebSocket #1 rotated leftover batch of {len(new_rotation_batch)} tokens (plus {len(priority_tokens)} priority).")
+                print(f"WS1 leftover: rotated {len(new_rotation_batch)} tokens + {len(priority_tokens)} priority.")
             except Exception as e:
-                print(f"[WS1] Subscribe leftover error: {e}")
+                print(f"[WS1 leftover] Subscribe error: {e}")
 
-            time.sleep(10)  # rotate again after 60 seconds
+            time.sleep(10)
 
     ################################################################
-    #    ROTATION #2, #3:  Standard rotation for full 3000 tokens
+    #            ROTATION #2, #3: Standard rotation
     ################################################################
 
     def manage_rotation(self, ws_id, tokens):
         """
-        Standard rotation for websockets #2 or #3.
-        They do not have permanent tokens, so we rotate the entire set.
+        Standard rotation for websockets #2 or #3, with auto-reconnect.
+        They do not have permanent tokens, so we rotate the entire 'tokens' set.
         """
         if not tokens:
             return
@@ -303,18 +337,19 @@ class SegmentPriorityManager:
         last_batch = None
 
         while not shutdown_event.is_set():
-            kws = self.connections.get(ws_id)
+            kws = self.ensure_ws_connected(ws_id, is_priority=False)
             if not kws:
-                print(f"WebSocket {ws_id} no longer available. Stopping rotation.")
+                # Could not reconnect => stop
+                print(f"WebSocket {ws_id} rotation giving up (no connection).")
                 break
 
             total_tokens = len(token_deque)
             if total_tokens <= self.SYMBOLS_PER_CONNECTION:
-                # No real rotation if all fit in one batch
+                # No real rotation if everything fits at once
                 time.sleep(10)
                 continue
 
-            # Unsubscribe old
+            # 1) Unsubscribe old
             if last_batch:
                 try:
                     kws.unsubscribe(last_batch)
@@ -322,17 +357,17 @@ class SegmentPriorityManager:
                 except Exception as e:
                     print(f"[WS {ws_id}] Unsubscribe error: {e}")
 
-            # Rotate a chunk
-            rotate_step = min(300, total_tokens)  # or whatever chunk you want
+            # 2) Rotate chunk
+            rotate_step = min(300, total_tokens)
             token_deque.rotate(-rotate_step)
 
+            # 3) Subscribe new
             new_batch = list(token_deque)[:self.SYMBOLS_PER_CONNECTION]
-
             try:
                 kws.subscribe(new_batch)
                 kws.set_mode(kws.MODE_FULL, new_batch)
                 last_batch = new_batch
-                print(f"WebSocket {ws_id} unsubscribed old, subscribed new set of {len(new_batch)} tokens.")
+                print(f"WS {ws_id} rotated batch of {len(new_batch)} tokens.")
             except Exception as e:
                 print(f"[WS {ws_id}] Subscribe error: {e}")
 
@@ -340,8 +375,9 @@ class SegmentPriorityManager:
 
 
 ################################################################
-#                         FLASK ROUTES
+#                      FLASK ROUTES
 ################################################################
+
 @app.route('/config.json')
 def get_config():
     directory = os.path.join(app.root_path, '../')
@@ -360,8 +396,9 @@ def get_all_ticks():
 
 
 ################################################################
-#                       MAIN ENTRY POINT
+#                     MAIN ENTRY POINT
 ################################################################
+
 if __name__ == '__main__':
     cache_file = "instruments_cache.pkl"
     if is_cache_valid(cache_file, timedelta(hours=24)):
@@ -372,6 +409,5 @@ if __name__ == '__main__':
     manager = SegmentPriorityManager()
     manager.start_streaming(instruments)
 
-    # Disable reloader to avoid double-launch
-    # If you want debug logs but no reloader, do debug=True, use_reloader=False
+    # Turn on debug logs, but disable the reloader to avoid double-spawning
     socketio.run(app, debug=True, use_reloader=False, host='127.0.0.1', port=5000)

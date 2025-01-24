@@ -29,9 +29,9 @@ const CardItem = React.memo(
               isPositive ? "text-green-500" : "text-red-500"
             }`}
           >
-            <span className="w-10 text-center">{netChange}</span>
+            <span className="text-center">{netChange}</span>
             <span
-              className={`ml-2 rounded px-2 flex items-center justify-center ${
+              className={`ml-2 rounded px-1 flex items-center justify-center ${
                 isPositive
                   ? "bg-green-100 text-green-500"
                   : "bg-red-100 text-red-500"
@@ -111,28 +111,35 @@ const CardData = React.memo(() => {
   const hasData = Object.keys(renderedData).length > 0;
 
   if (!hasData) {
-    return (
-      <div className="text-center p-4">
-        No data available
-      </div>
-    );
+    return <div className="text-center p-4">No data available</div>;
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-2 mt-2 p-1">
-      {Object.keys(renderedData).map((token) => {
-        const data = renderedData[token];
-        return (
-          <CardItem
-            key={token}
-            symbolName={data.symbolName}
-            lastPrice={data.lastPrice}
-            netChange={data.netChange}
-            changePercentage={data.changePercentage}
-            isPositive={data.isPositive}
-          />
-        );
-      })}
+    <div className="p-2">
+      <div className="flex items-center mb-2">
+        <div className="flex-grow h-px bg-gray-200"></div>
+        <h2 className="px-4 text-center text-xl font-semibold text-gray-800">
+          Major Indices
+        </h2>
+        <div className="flex-grow h-px bg-gray-200"></div>
+      </div>
+
+      {/* The card grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-2 p-2">
+        {Object.keys(renderedData).map((token) => {
+          const data = renderedData[token];
+          return (
+            <CardItem
+              key={token}
+              symbolName={data.symbolName}
+              lastPrice={data.lastPrice}
+              netChange={data.netChange}
+              changePercentage={data.changePercentage}
+              isPositive={data.isPositive}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 });
