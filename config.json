@@ -6,7 +6,8 @@
         "260105": "BANKNIFTY",
         "259849": "NIFTY IT",
         "257801": "FINNIFTY",
-        "265": "SENSEX"
+        "265": "SENSEX",
+        "291849": "GIFT NIFTY"
     },
     "marqueeTokens": {
         "256265": "NIFTY 50",
