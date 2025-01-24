@@ -18,10 +18,15 @@ const App = () => {
           {/* Admin Routes */}
           <Route path="/admin" element={<AdminLayout />}>
             <Route path="dashboard" element={<Dashboard />} />
-            <Route path="upload" element={<Upload/>}/>
+            <Route path="upload" element={<Upload />} />
           </Route>
         </Routes>
       </Router>
+      {/* <div className="">
+        <MarqueeData />
+        <CardData />
+        <GlobalData />
+      </div> */}
     </WebSocketProvider>
   );
 };

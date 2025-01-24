@@ -28,9 +28,9 @@ function Navbar() {
     <nav className="bg-white shadow-md px-4 py-2 flex items-center justify-between border-b">
       {/* Logo Section */}
       <div className="flex items-center">
-        <Link to="/">
+        {/* <Link to="/">
           <img src={png1} alt="Logo" className="w-16 h-auto" />
-        </Link>
+        </Link> */}
       </div>
 
       {/* Right Section */}

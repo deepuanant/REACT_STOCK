@@ -6,7 +6,22 @@
         "260105": "BANKNIFTY",
         "259849": "NIFTY IT",
         "257801": "FINNIFTY",
-        "265": "SENSEX"
+        "265": "SENSEX",
+        "291849": "GIFT NIFTY"
+    },
+    "globalTokens": {
+        "398345": "US COMPOSITE",
+        "398601": "US 30",
+        "398857": "US 100",
+        "399113": "SHANGHAI CHINA",
+        "399369": "UK 100",
+        "399625": "HANG SENG",
+        "399881": "AUSTRALIA 200",
+        "400137": "FRANCE 40",
+        "400393": "GERMANY 40",
+        "400905": "JAPAN 225",
+        "401161": "US 500",
+        "401673": "US 10 YEAR TREASURY YIELD"
     },
     "marqueeTokens": {
         "256265": "NIFTY 50",
