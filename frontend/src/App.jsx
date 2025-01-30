@@ -14,7 +14,6 @@ const App = () => {
         <Routes>
           {/* Public Routes */}
           <Route path="/" element={<Main />} />
-
           {/* Admin Routes */}
           <Route path="/admin" element={<AdminLayout />}>
             <Route path="dashboard" element={<Dashboard />} />
